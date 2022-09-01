@@ -14,7 +14,9 @@
 #include "sdkconfig.h"
 
 #include "../lib/MDB/MDB_core.h"
-static const int RX_BUF_SIZE = 1024;
+#include "../lib/USB/USB_com.h"
+
+
 
 #define TXD_PIN (GPIO_NUM_17)
 #define RXD_PIN (GPIO_NUM_16)
@@ -23,6 +25,24 @@ static const int RX_BUF_SIZE = 1024;
 
 //uart_parity_t parity_mode = {UART_PARITY_EVEN};
 void send_JUST_REST(uint8_t iteration);
+
+
+void init_logging_uart(void){
+
+    const uart_config_t uart_config = {
+        .baud_rate = 230400,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_APB,
+        
+    };
+    // We won't use a buffer for sending data.
+    uart_driver_install(UART_NUM_0, 1024, 0, 0, NULL, 0);
+    uart_param_config(UART_NUM_0, &uart_config);
+    uart_set_pin(UART_NUM_0, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+}
 
 int sendData(const char* logName, const char* data)
 {
@@ -88,35 +108,39 @@ void rx_task(void *arg)
 {
     static const char *RX_TASK_TAG = "RX_TASK";
     esp_log_level_set(RX_TASK_TAG, ESP_LOG_INFO);
-    uint8_t* data = (uint8_t*) malloc(RX_BUF_SIZE+1);
-    uint8_t TX_DATA[2];
-    TX_DATA[0] = 0x00;
+    char data[64];
+
+    int length = 0;
+
     while (1) {
         
         
-        int length = 0;
-        uart_get_buffered_data_len(UART_NUM_1, (size_t*)&length);
+        
+        uart_get_buffered_data_len(UART_NUM_0, (size_t*)&length);
         
         //ESP_LOGI(RX_TASK_TAG, "Cached bytes: %d", length);
-        if(length==2){
-            uint8_t iter = 200;
-            uint64_t start = esp_timer_get_time();
-
-            length = uart_read_bytes(UART_NUM_1, data, length, 1 / portTICK_PERIOD_MS);   
+        if(length>1){
+            uint8_t i;
+            length = uart_read_bytes(UART_NUM_0, data, length, 10 / portTICK_PERIOD_MS);
+            data[length] = '\0'; //null terminate
+            if( memcmp(data, MDB_USB_BEGIN_SESSION_HEADER, strlen(MDB_USB_BEGIN_SESSION_HEADER))  == 0)
+            {
+                //data+strlen(MDB_USB_BEGIN_SESSION_HEADER);
+                //ESP_LOGI(RX_TASK_TAG, "Num bytes: %d", length);
+                uint16_t fund;
+                fund = atoi(data+strlen(MDB_USB_BEGIN_SESSION_HEADER));
+                if(fund>0)
+                    MDB_send_fund(fund);       
+                //ESP_LOGI(RX_TASK_TAG, "%d", ( atoi(data+strlen(MDB_USB_BEGIN_SESSION_HEADER)) ) );
+            }
 
             
-            send_JUST_REST(iter);
-
-            uint64_t end = esp_timer_get_time();
-            length = uart_read_bytes(UART_NUM_1, data, iter, 100 / portTICK_PERIOD_MS);
+            
+            ESP_LOGI(RX_TASK_TAG, "%s", data);
             length = 0;
-
-            
-            
-            ESP_LOGI(RX_TASK_TAG, "Time: %llu", end-start);
         }
 
-        vTaskDelay(1 / portTICK_PERIOD_MS);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
 
     }
     free(data);
@@ -124,8 +148,10 @@ void rx_task(void *arg)
 
 void app_main(void)
 {   
-    uart_set_baudrate(UART_NUM_0, 230400); //faster baud rate.
-    //xTaskCreate(&rx_task, "uart_rx_task", 4096, NULL, 5, NULL);
+    
+    init_logging_uart();
+
+    xTaskCreate(&rx_task, "uart_rx_task", 4096, NULL, 5, NULL);
     xTaskCreate(&MDB_core_task, "MDB_task", 4*1024,NULL, configMAX_PRIORITIES-1, NULL);
     xTaskCreate(&led_blink,"LED_BLINK",4*1024,NULL,4,NULL);
     //xTaskCreate(&print_time_task,"PRINT_TIME_TASK",1024*4,NULL,3,NULL);

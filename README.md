@@ -1,27 +1,6 @@
-How to build PlatformIO based project
+MDB CASHLESS Device Firmware for ESP32
 =====================================
 
-1. [Install PlatformIO Core](https://docs.platformio.org/page/core.html)
-2. Download [development platform with examples](https://github.com/platformio/platform-espressif32/archive/develop.zip)
-3. Extract ZIP archive
-4. Run these commands:
+#### Firmware has the following changes from the default settings.
 
-```shell
-# Change directory to example
-$ cd platform-espressif32/examples/espidf-peripherals-uart
-
-# Build project
-$ pio run
-
-# Upload firmware
-$ pio run --target upload
-
-# Build specific environment
-$ pio run -e esp32dev
-
-# Upload firmware for the specific environment
-$ pio run -e esp32dev --target upload
-
-# Clean build files
-$ pio run --target clean
-```
+1-CONFIG_FREERTOS_HZ is changed from 100 to 1000. FreeRTOS runs at 1kHz.

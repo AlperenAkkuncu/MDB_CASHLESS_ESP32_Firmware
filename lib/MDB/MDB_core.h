@@ -61,6 +61,12 @@
 #define VEND_SESSION_COMPLETE 0x04
 #define VEND_CASH_SALE 0x05
 
+//POLL RESPONSES
+#define POLL_BEGIN_SESSION 0x03
+#define POLL_VEND_APPROVED 0x05
+#define POLL_VEND_DENIED 0x06
+#define POLL_VEND_END_SESSION 0x07
+
 
 enum E_parser_result{
     INCOMPLETE,
@@ -76,13 +82,16 @@ enum E_parser_result{
     VEND_SUCCESS_CMD,
     VEND_FAILURE_CMD,
     VEND_SESSION_COMPLETE_CMD,
-    VEND_CASH_SALE_CMD
+    VEND_CASH_SALE_CMD,
 };
 
 enum E_poll_response{
     ACK,
     JUST_RESET,
-    BEGIN_SESSION
+    BEGIN_SESSION,
+    VEND_APPROVE,
+    VEND_DENY,
+    END_SESSION
 };
 enum E_reader_state{
     ENABLED,
@@ -94,6 +103,24 @@ struct S_fund {
     bool is_fund_new;   //to notify MDB core that new fund has arrived
     bool is_fund_sent;  //to check if it's sent
 };
+
+struct S_vend_request{
+    uint16_t item_number;
+    uint16_t item_price;
+};
+
+struct S_vend_flags {
+    bool vending_in_prog;  //set to one begin session to end session
+    bool session_begun;    //set when BEGIN SESSION is sent receveied, un set when end session received
+    bool vend_requested;   //set when VEND_REQUEST received, unset when end session received.
+    bool vend_approved;    //set when VEND APPROVED is sent, unset when end session is received
+    bool vend_denied;      //set when VEND DENIED is sent, unset when end session is received
+    bool vend_succeed;     //set when VEND_SUCCESS is received, unset when end session is received
+    bool vend_failed;      //set when VEND_FAILURE command received, unset when end session received.
+    bool session_completed;
+};
+
+
 
 void MDB_core_task(void *arg);
 void MDB_send_fund(uint16_t fund_amount);

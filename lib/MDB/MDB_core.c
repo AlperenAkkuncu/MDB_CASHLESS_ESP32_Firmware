@@ -33,8 +33,8 @@ uint8_t PAYMENT_TYPE[3] = {0x00, 0x00, 0x00};
 Global Variables and global flags
 */
 struct S_fund fund;
-
-
+struct S_vend_flags vend_flags;
+struct S_vend_request vend_request;
 
 /*
 Private functions
@@ -45,6 +45,12 @@ void MDB_send_ACK(void);
 void MDB_send_JUST_RESET(void);
 void MDB_send_package(uint8_t *buffer, uint8_t len);
 void MDB_send_BEGIN_SESSION(uint16_t fund_amount);
+void MDB_send_VEND_APPROVED(uint16_t vend_amount);
+void MDB_send_VEND_DENIED(void);
+void MDB_send_END_SESSION(void);
+
+
+void reset_vend_flags(void);
 
 void MDB_core_task(void *arg)
 {
@@ -53,18 +59,19 @@ void MDB_core_task(void *arg)
 
     int buffered_data_len = 0;
     uint8_t MDB_data[64]; //holds newly arrived bytes
-    uint8_t MDB_package[64], *p_MDB_package;//holds package
+    uint8_t MDB_package[64];//holds package
     uint8_t MDB_package_counter = 0;
 
     /*
-    Global Variables and global flags
+    Task global Variables and global flags
     */
     fund.fund_amount = 0;
     fund.is_fund_new = 0;
     fund.is_fund_sent = 0;
 
-    //Buffers for queue messages
-    char USB_queue_buffer[64];
+    vend_request.item_number = 0;
+    vend_request.item_price = 0;
+
 
     //enumerations
     enum E_parser_result parser_result = INVALID;
@@ -87,9 +94,16 @@ void MDB_core_task(void *arg)
         */
         //check USB queue
         if(fund.is_fund_new){
-            ESP_LOGI(MDB_TAG, "Got fund %d", fund.fund_amount);   
-            fund.is_fund_new = 0;
-            poll_response = BEGIN_SESSION;
+            if(vend_flags.vending_in_prog == false){
+                ESP_LOGI(MDB_TAG, "Got fund %d", fund.fund_amount);   
+                fund.is_fund_new = 0;
+                poll_response = BEGIN_SESSION;
+            }
+            else{
+                ESP_LOGI(MDB_TAG, "REJECTED: Vending in progress");   
+                fund.is_fund_new = 0;
+            }
+
         }
 
 
@@ -157,14 +171,41 @@ void MDB_core_task(void *arg)
                             ESP_LOGI(MDB_TAG, "BEGIN SESSION ACK"); 
                         }
                         fund.is_fund_sent = 1;
-                            
+                        vend_flags.session_begun = true;
+                        vend_flags.vending_in_prog = true;
+                    }
+                    else if(poll_response == VEND_APPROVE){
+                        
+                        MDB_send_VEND_APPROVED(vend_request.item_price);
+                        poll_response = ACK;
+                        vend_flags.vend_approved = true;
+                        ESP_LOGI(MDB_TAG, "VEND APPROVED"); 
+                    }
+                    else if(poll_response == VEND_DENY){
+                        MDB_send_VEND_DENIED();
+                        poll_response = ACK;
+                        vend_flags.vend_denied = true;
+                        ESP_LOGI(MDB_TAG, "VEND DENIED"); 
+                    }
+                    else if(poll_response == END_SESSION){
+                        MDB_send_END_SESSION();
+                        poll_response = ACK;
+                        reset_vend_flags();
+                        uint8_t ACK;
+                        ACK = get_ACK();
+                        if(ACK != 0x00){
+                            ESP_LOGI(MDB_TAG, "END SESSION ACK is not received"); 
+                        }
+                        else{
+                            ESP_LOGI(MDB_TAG, "END SESSION ACK"); 
+                        }
                     }
 
                     //clean-up           
                     MDB_package_counter = 0;
 
                     //LOG
-                    ESP_LOGI(MDB_TAG, "VALID POLL"); 
+                    //ESP_LOGI(MDB_TAG, "VALID POLL"); 
                 break;
 
                 case(SETUP_CONFIG_CMD): {
@@ -239,6 +280,104 @@ void MDB_core_task(void *arg)
                 break;
                 }
 
+                case(VEND_REQUEST_CMD): {
+                    
+                    if(vend_flags.session_begun == true){
+                        if(vend_flags.vend_requested == false){
+                            MDB_send_ACK();   
+                            
+                            //get item price
+                            vend_request.item_price = (uint16_t)MDB_package[2]<<8 | (uint16_t)MDB_package[3];
+
+                            //get item number 
+                            vend_request.item_number = (uint16_t)MDB_package[4]<<8 | (uint16_t)MDB_package[5];
+
+                            vend_flags.vend_requested = true;
+
+                            if(fund.fund_amount >= vend_request.item_price )
+                                poll_response = VEND_APPROVE;
+                            else
+                                poll_response = VEND_DENY;
+
+                            ESP_LOGI(MDB_TAG, "VEND item: %d", vend_request.item_number); 
+                            ESP_LOGI(MDB_TAG, "VEND price: %d", vend_request.item_price); 
+                        }
+                        else
+                            ESP_LOGI(MDB_TAG, "VEND REQUEST repeated"); 
+                    }
+                    else 
+                    {
+                        ESP_LOGI(MDB_TAG, "VEND REQUEST REJECTED"); 
+                    }
+
+                    //clean-up           
+                    MDB_package_counter = 0;
+                
+                break;
+                }
+
+                case(VEND_CANCEL_CMD): {
+
+                    //clean-up           
+                    MDB_package_counter = 0;
+
+                    //LOG
+                    ESP_LOGI(MDB_TAG, "VEND CANCEL"); 
+                
+                break;
+                }
+
+                case(VEND_SUCCESS_CMD): {
+
+                    MDB_send_ACK();  
+                    vend_flags.vend_succeed = true;
+
+                    //clean-up           
+                    MDB_package_counter = 0;
+
+                    //LOG
+                    ESP_LOGI(MDB_TAG, "VEND SUCCESS"); 
+                
+                break;
+                }
+
+                case(VEND_FAILURE_CMD): {
+
+                    //clean-up           
+                    MDB_package_counter = 0;
+
+                    //LOG
+                    ESP_LOGI(MDB_TAG, "VEND FAILURE"); 
+                
+                break;
+                }
+
+                case(VEND_SESSION_COMPLETE_CMD): {
+
+                    MDB_send_ACK();  
+                    vend_flags.session_completed = true; 
+                    poll_response = END_SESSION;
+
+                    //clean-up           
+                    MDB_package_counter = 0;
+
+                    //LOG
+                    ESP_LOGI(MDB_TAG, "VEND SESSION COMPLETE"); 
+                
+                break;
+                }
+
+                case(VEND_CASH_SALE_CMD): {
+
+                    //clean-up           
+                    MDB_package_counter = 0;
+
+                    //LOG
+                    ESP_LOGI(MDB_TAG, "VEND CASH SALE"); 
+                
+                break;
+                }
+
 
                 default:
                     MDB_package_counter = 0;
@@ -270,7 +409,7 @@ enum E_parser_result MDB_parse_package(uint8_t *data, uint8_t data_len){
            *p_data == CASHLESS1_EXPANSION_CMD  )
         {
             uint8_t cmd = *p_data;
-            uint8_t sub_cmd ;
+            uint8_t sub_cmd = 0xFF;
             if(data_len >= 2)
                 sub_cmd = *(p_data+1);
             
@@ -376,7 +515,7 @@ enum E_parser_result MDB_parse_package(uint8_t *data, uint8_t data_len){
                 //READER CMD END
 
                 //PARSE VEND CMD START
-                case CASHLESS1_VEND_CMD:
+                case (CASHLESS1_VEND_CMD):
                     if(data_len<CASHLESS_VEND_CANCEL_LEN) //shorter than shortest package
                         return INCOMPLETE;
 
@@ -412,7 +551,7 @@ enum E_parser_result MDB_parse_package(uint8_t *data, uint8_t data_len){
                             return INVALID;
                     }
 
-                    else if(sub_cmd == VEND_SUCCESS && data_len == CASHLESS_VEND_SUCCESS_LEN){
+                    else if(sub_cmd == VEND_SUCCESS){
                         if(data_len == CASHLESS_VEND_SUCCESS_LEN){
                             bool checksum_state;
                             checksum_state = MDB_check_checksum(data,data_len);
@@ -458,7 +597,7 @@ enum E_parser_result MDB_parse_package(uint8_t *data, uint8_t data_len){
                             return INVALID;
                         
                     }
-                    else if(sub_cmd == VEND_CASH_SALE_CMD){
+                    else if(sub_cmd == VEND_CASH_SALE){
                         if(data_len == CASHLESS_VEND_CASH_SALE_LEN){
                             bool checksum_state;
                             checksum_state = MDB_check_checksum(data,data_len);
@@ -503,6 +642,11 @@ enum E_parser_result MDB_parse_package(uint8_t *data, uint8_t data_len){
     }
     return INVALID;
 }
+
+
+/***************************/
+/***MDB sensing packages***/
+/***************************/
 
 bool MDB_check_checksum(uint8_t *data, uint8_t data_len){
     uint8_t i, sum = 0,*p_data = data;
@@ -550,7 +694,7 @@ void MDB_send_package(uint8_t *buffer, uint8_t len){
 void MDB_send_BEGIN_SESSION(uint16_t fund_amount){
     uint8_t i=0, MDB_TX[12];
 
-    MDB_TX[i++] = 0x03; // begin session header
+    MDB_TX[i++] = POLL_BEGIN_SESSION; // begin session header
     MDB_TX[i++] = (uint8_t)(fund_amount>>8);
     MDB_TX[i++] = (uint8_t) (fund_amount);
 
@@ -562,6 +706,46 @@ void MDB_send_BEGIN_SESSION(uint16_t fund_amount){
     MDB_send_package(MDB_TX,10);
 }
 
+void MDB_send_VEND_APPROVED(uint16_t vend_amount){
+    uint8_t i = 0, MDB_TX[3];
+
+    MDB_TX[i++] = POLL_VEND_APPROVED;
+    MDB_TX[i++] = (uint8_t)(vend_amount>>8);
+    MDB_TX[i++] = (uint8_t) (vend_amount);
+
+    MDB_send_package(MDB_TX,i);
+
+}
+
+void MDB_send_VEND_DENIED(void){
+    uint8_t vend_denied_char = POLL_VEND_DENIED;
+
+    MDB_send_package(&vend_denied_char,1);
+}
+
+void MDB_send_END_SESSION(void){
+    uint8_t vend_end_session_char = POLL_VEND_END_SESSION;
+
+    MDB_send_package(&vend_end_session_char,1);
+}
+
+
+
+/***************************/
+/***Flags, clean up***/
+/***************************/
+
+void reset_vend_flags(void){
+
+    vend_flags.vending_in_prog = false;
+    vend_flags.session_begun = false;
+    vend_flags.vend_requested = false;
+    vend_flags.vend_approved = false;
+    vend_flags.vend_denied = false;
+    vend_flags.vend_succeed = false;
+    vend_flags.vend_failed = false;
+    vend_flags.session_completed = false;
+}
 
 /****************************/
 /***MDB _Core communication***/

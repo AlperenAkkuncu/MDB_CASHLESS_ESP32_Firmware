@@ -52,6 +52,7 @@ int sendData(const char* logName, const char* data)
     return txBytes;
 }
 
+/*
 static void tx_task(void *arg)
 {
     static const char *TX_TASK_TAG = "TX_TASK";
@@ -61,7 +62,7 @@ static void tx_task(void *arg)
         vTaskDelay(2000 / portTICK_PERIOD_MS);
     }
 }
-
+*/
 void send_JUST_REST(uint8_t iteration){
     uint8_t TX_DATA[2], i;
     
@@ -120,7 +121,7 @@ void rx_task(void *arg)
         
         //ESP_LOGI(RX_TASK_TAG, "Cached bytes: %d", length);
         if(length>1){
-            uint8_t i;
+            
             length = uart_read_bytes(UART_NUM_0, data, length, 10 / portTICK_PERIOD_MS);
             data[length] = '\0'; //null terminate
             if( memcmp(data, MDB_USB_BEGIN_SESSION_HEADER, strlen(MDB_USB_BEGIN_SESSION_HEADER))  == 0)
